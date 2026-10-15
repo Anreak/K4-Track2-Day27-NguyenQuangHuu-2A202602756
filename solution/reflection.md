@@ -1,24 +1,17 @@
 # Báo cáo phản hồi (Reflection)
 
-## Các loại lỗi khó bắt nhất và nguyên nhân
+## 1. Các loại lỗi khó bắt nhất và nguyên nhân
 
-Những lỗi khó bắt nhất tập trung chủ yếu ở các trường hợp tinh vi (subtle faults) trong phase Private, bao gồm:
-- Lỗi subtle embedding_drift và corpus_staleness trong luồng embedding_batch.
-- Lỗi subtle volume_drop, volume_spike, null_spike trong luồng data_batch.
-- Lỗi subtle runtime_anomaly trong luồng lineage_run.
+Các lỗi khó phát hiện nhất là nhóm lỗi tinh vi (subtle faults) trong phase Private, điển hình là trôi dạt nhẹ ở embedding_drift, corpus_staleness và bất thường thời lượng ở lineage_run.
 
-Nguyên nhân:
-Các mẫu dữ liệu bị lỗi này có giá trị đo lường nằm hoàn toàn bên trong dải dao động tự nhiên của dữ liệu sạch lịch sử. Cụ thể:
-- centroid_shift của các ca trôi dạt tinh vi dao động từ 0.0289 đến 0.0311, trong khi dữ liệu sạch có độ lệch tự nhiên lên đến 0.0387.
-- avg_doc_age_days của các ca corpus_staleness tinh vi là từ 31.8 đến 37.6 ngày, trong khi dữ liệu sạch có tuổi trung bình dao động từ 37.5 đến 41.0 ngày.
-- runtime của dbt job trong lineage_run bị nghẽn nhẹ ở mức 4480 - 4740 ms, trong khi job bình thường có lúc chạy mất tới 4805 ms.
+Nguyên nhân kỹ thuật:
+- Giá trị đo lường của các lỗi này nằm hoàn toàn bên trong dải dao động tự nhiên của dữ liệu sạch lịch sử.
+- Điển hình: centroid_shift của ca trôi dạt tinh vi (0.0289 - 0.0311) thấp hơn mức biến thiên tự nhiên sạch (lên tới 0.0387); tuổi tài liệu trung bình của ca lỗi (31.8 - 37.6 ngày) nằm dưới dải bình thường (37.5 - 41.0 ngày); thời lượng job dbt chỉ tăng nhẹ (4480 - 4740 ms) so với mức tối đa sạch (4805 ms).
+- Nếu hạ ngưỡng để bắt các lỗi này, tỷ lệ báo động giả (FPR) sẽ tăng mạnh. Do trọng số phạt FPR rất nặng (-30 điểm), chiến lược tối ưu là duy trì ngưỡng an toàn để đảm bảo FPR = 0%, bảo vệ độ tin cậy vận hành thực tế.
 
-Nếu cố tình hạ ngưỡng phát hiện để bắt các ca lỗi này, hệ thống sẽ phát sinh hàng loạt báo động giả (False Positives) trên dòng sự kiện bình thường. Trong công thức chấm điểm, trọng số phạt của FPR lên tới -30 điểm (gấp nhiều lần mức đóng góp nhỏ của một vài lỗi riêng lẻ). Do đó, việc giữ vững ngưỡng phân tách an toàn để bảo toàn FPR = 0% là chiến lược tối ưu cả về điểm số kỹ thuật lẫn độ tin cậy trong vận hành thực tế.
+## 2. Đánh đổi chi phí và độ bao phủ nếu có thêm lượt cải tiến
 
-## Thay đổi về đánh đổi chi phí và độ bao phủ nếu có thêm lượt cải tiến
+Nếu có thêm lượt cải tiến, giải pháp sẽ tập trung vào hai hướng:
 
-1. Quản lý hạn mức thông minh ở phase Public:
-Ở phase Public, tổng chi phí gọi công cụ là 240.0 credits trên ngân sách 220.0 credits (overage 0.0909, bị trừ 1.82 điểm). Tuy mất 1.82 điểm do vượt ngân sách nhẹ, việc gọi đủ công cụ giúp giải pháp đạt TPR tuyệt đối 100% (+50.0 điểm), mang lại điểm số tổng thể rất cao là 48.18 điểm. Nếu có thêm một lượt cải tiến, giải pháp có thể phân tầng sâu hơn bằng cách kiểm tra sơ bộ metadata trong payload miễn phí trước khi quyết định gọi các công cụ tốn kém như feature_drift và embedding_drift (2.0 credits mỗi lần).
-
-2. Tận dụng ctx.state để xây dựng thống kê luồng động (Online Streaming Statistics):
-Thay vì chỉ phụ thuộc vào các ngưỡng tĩnh từ ctx.baseline, ta có thể dùng ctx.state (hoàn toàn miễn phí credits) để tích lũy thống kê trung bình trượt (EWMA) và độ biến thiên thời gian thực trên chính luồng stream. Điều này giúp phát hiện các xu hướng trôi dạt từ từ theo chuỗi thời gian mà không gây báo động nhầm trên các nhiễu cục bộ ngắn hạn.
+- Phân tầng kiểm tra để tiết kiệm ngân sách: Tận dụng dữ liệu miễn phí sẵn có trong payload để sàng lọc sơ bộ trước khi gọi các công cụ tốn 2.0 credits như feature_drift hay embedding_drift. Việc này giúp đưa chi phí phase Public về dưới mức ngân sách 220 credits mà vẫn giữ nguyên TPR = 100%.
+- Sử dụng ctx.state để theo dõi thống kê động: Dùng ctx.state (không tốn credits) để tính toán thống kê trung bình trượt (EWMA) trên dòng sự kiện thực tế. Điều này hỗ trợ phân biệt rõ hơn giữa xu hướng suy giảm chất lượng thực sự và dao động ngẫu nhiên ngắn hạn, thay vì chỉ dựa vào ngưỡng tĩnh từ ctx.baseline.
